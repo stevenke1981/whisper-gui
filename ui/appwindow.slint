@@ -1,0 +1,687 @@
+import { Button, ComboBox, LineEdit, TextEdit, CheckBox, HorizontalBox, VerticalBox, ProgressIndicator, TabWidget, ScrollView } from "std-widgets.slint";
+
+export struct Settings {
+    model_path: string,
+    language: string,
+    send_mode: string,
+    http_url: string,
+    gpu_enabled: bool,
+    hotkey: string,
+    output_dir: string,
+    hotkey_toggle_enabled: bool,
+    hotkey_ptt_enabled: bool,
+}
+
+// ── Light / Dark theme palette ────────────────────────────────────────────
+global Theme {
+    in-out property <bool> dark: true;
+
+    // Background layers
+    out property <color> bg:         dark ? #0d1117 : #f6f8fa;
+    out property <color> surface:    dark ? #161b22 : #ffffff;
+    out property <color> card:       dark ? #21262d : #ffffff;
+    out property <color> border:     dark ? #30363d : #d0d7de;
+
+    // Accent
+    out property <color> accent:     dark ? #388bfd : #0969da;
+    out property <color> accent-dim: dark ? #1c4591 : #ddf4ff;
+
+    // Text
+    out property <color> text:       dark ? #c9d1d9 : #1f2328;
+    out property <color> text-dim:   dark ? #8b949e : #656d76;
+
+    // Status colours
+    out property <color> success:    dark ? #3fb950 : #1a7f37;
+    out property <color> danger:     dark ? #f85149 : #d1242f;
+    out property <color> warning:    dark ? #e3b341 : #9a6700;
+
+    // Shadow (stronger in dark, subtler in light)
+    out property <color> shadow:     dark ? #00000050 : #0000001a;
+}
+
+// ── Reusable styled card ──────────────────────────────────────────────────
+component SectionCard inherits Rectangle {
+    in property <string> header: "";
+    background: Theme.card;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border;
+    drop-shadow-blur: 10px;
+    drop-shadow-color: Theme.shadow;
+    drop-shadow-offset-y: 3px;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        if root.header != "": Text {
+            text: root.header;
+            font-size: 13px;
+            color: Theme.text-dim;
+            font-weight: 600;
+            letter-spacing: 0.8px;
+        }
+        @children
+    }
+}
+
+// ── App state (Rust backend binds to these — do not rename) ───────────────
+export global AppState {
+    in-out property <string>   status: "Ready";
+    in-out property <string>   transcribed-text: "";
+    in-out property <string>   process-log: "";
+    in-out property <float>    progress: 0.0;
+    in-out property <bool>     is-recording: false;
+    in-out property <bool>     is-processing: false;
+    in-out property <string>   current-model: "tiny";
+    in-out property <string>   current-language: "auto";
+    in-out property <string>   memory-usage: "";
+    in-out property <string>   gpu-usage: "";           // e.g. "CUDA" / "CUDA 2.1GB"
+    in-out property <bool>     is-zh: true;
+    in-out property <string>   download-model-select: "tiny";
+    in-out property <Settings> settings: {
+        model_path: "models/ggml-tiny.bin",
+        language: "auto",
+        send_mode: "clipboard",
+        http_url: "",
+        gpu_enabled: true,                              // force CUDA by default
+        hotkey: "",
+        output_dir: "output",
+        hotkey_toggle_enabled: true,
+        hotkey_ptt_enabled: true,
+    };
+
+    callback transcribe-file(string);
+    callback start-recording();
+    callback stop-recording();
+    callback load-model();
+    callback save-settings();
+    callback load-settings();
+    callback select-model-file();
+    callback send-text(string);
+    callback download-model(string);
+    callback preset-model-selected(string);
+}
+
+export component AppWindow inherits Window {
+    title: AppState.is-zh ? "Whisper GUI — 離線語音辨識" : "Whisper GUI — Offline Speech Recognition";
+    preferred-width: 740px;
+    preferred-height: 640px;
+    min-width: 620px;
+    min-height: 500px;
+    background: Theme.bg;
+
+    VerticalLayout {
+        spacing: 0px;
+        padding: 0px;
+
+        // ── Header bar ────────────────────────────────────────────────────
+        Rectangle {
+            height: 58px;
+            background: Theme.surface;
+
+            HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                alignment: center;
+
+                // Left: icon + title + badges
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 10px;
+                    alignment: start;
+
+                    Text {
+                        text: "🎙";
+                        font-size: 24px;
+                        vertical-alignment: center;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 1px;
+                        Text {
+                            text: "Whisper GUI";
+                            font-size: 17px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+                        Text {
+                            text: AppState.is-zh ? "離線語音辨識" : "Offline Speech Recognition";
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                        }
+                    }
+
+                    // Model badge
+                    Rectangle {
+                        width: 72px;
+                        height: 26px;
+                        border-radius: 13px;
+                        background: Theme.accent-dim;
+                        border-width: 1px;
+                        border-color: Theme.accent;
+                        Text {
+                            text: AppState.current-model;
+                            font-size: 13px;
+                            color: Theme.accent;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // GPU status badge (shown when Rust sets gpu-usage)
+                    if AppState.gpu-usage != "": Rectangle {
+                        width: 100px;
+                        height: 26px;
+                        border-radius: 13px;
+                        background: Theme.dark ? #0d2a0d : #dcfce7;
+                        border-width: 1px;
+                        border-color: Theme.success;
+                        HorizontalLayout {
+                            spacing: 4px;
+                            alignment: center;
+                            Rectangle {
+                                width: 6px;
+                                height: 6px;
+                                border-radius: 3px;
+                                background: Theme.success;
+                            }
+                            Text {
+                                text: AppState.gpu-usage;
+                                font-size: 12px;
+                                color: Theme.success;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // Right: theme toggle + language toggle
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: end;
+
+                    // Light / dark toggle
+                    theme-btn := Rectangle {
+                        width: 36px;
+                        height: 34px;
+                        border-radius: 6px;
+                        background: theme-ta.has-hover ? Theme.border : #00000000;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        Text {
+                            text: Theme.dark ? "☀" : "🌙";
+                            font-size: 16px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        theme-ta := TouchArea {
+                            clicked => { Theme.dark = !Theme.dark; }
+                        }
+                        animate background { duration: 120ms; easing: ease; }
+                    }
+
+                    // Language toggle
+                    lang-btn := Rectangle {
+                        width: 72px;
+                        height: 34px;
+                        border-radius: 6px;
+                        background: lang-ta.has-hover ? Theme.border : #00000000;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        Text {
+                            text: AppState.is-zh ? "EN" : "繁中";
+                            color: Theme.text-dim;
+                            font-size: 14px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        lang-ta := TouchArea {
+                            clicked => { AppState.is-zh = !AppState.is-zh; }
+                        }
+                        animate background { duration: 120ms; easing: ease; }
+                    }
+                }
+            }
+
+            // Bottom divider
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                width: parent.width;
+                background: Theme.border;
+            }
+        }
+
+        // ── Tab widget ────────────────────────────────────────────────────
+        TabWidget {
+            vertical-stretch: 1;
+
+            // ── HOME TAB ─────────────────────────────────────────────────
+            Tab {
+                title: AppState.is-zh ? "  主頁  " : "  Home  ";
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+
+                    // Model card
+                    SectionCard {
+                        header: AppState.is-zh ? "模型" : "Model";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text <=> AppState.settings.model_path;
+                                placeholder-text: "models/ggml-tiny.bin";
+                            }
+                            Button {
+                                text: AppState.is-zh ? "瀏覽" : "Browse";
+                                clicked => { AppState.select-model-file(); }
+                            }
+                            ComboBox {
+                                width: 100px;
+                                model: ["tiny", "base", "small", "medium", "large-v3"];
+                                current-value <=> AppState.current-model;
+                                selected(value) => { AppState.preset-model-selected(value); }
+                            }
+                            Button {
+                                text: AppState.is-zh ? "載入模型" : "Load";
+                                clicked => { AppState.load-model(); }
+                                enabled: !AppState.is-processing;
+                            }
+                        }
+                    }
+
+                    // Language card (GPU removed — force CUDA in Rust)
+                    SectionCard {
+                        header: AppState.is-zh ? "語言" : "Language";
+                        HorizontalLayout {
+                            spacing: 12px;
+                            alignment: start;
+                            Text {
+                                text: AppState.is-zh ? "辨識語言：" : "Language:";
+                                color: Theme.text;
+                                vertical-alignment: center;
+                                font-size: 15px;
+                            }
+                            ComboBox {
+                                width: 130px;
+                                model: ["auto","en","zh","ja","ko","de","fr","es","pt","ru","it","nl","pl","ar","tr","vi","th","hi"];
+                                current-value <=> AppState.settings.language;
+                            }
+                            Rectangle { width: 1px; height: 24px; background: Theme.border; }
+                            // CUDA always-on indicator
+                            Rectangle {
+                                width: 80px;
+                                height: 26px;
+                                border-radius: 13px;
+                                background: Theme.dark ? #0d2a0d : #dcfce7;
+                                border-width: 1px;
+                                border-color: Theme.success;
+                                Text {
+                                    text: "⚡ CUDA";
+                                    font-size: 12px;
+                                    color: Theme.success;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Audio controls card
+                    SectionCard {
+                        header: AppState.is-zh ? "音訊輸入" : "Audio Input";
+                        VerticalLayout {
+                            spacing: 10px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: center;
+
+                                Button {
+                                    text: AppState.is-zh ? "🎤 開始錄音" : "🎤 Start";
+                                    clicked => { AppState.start-recording(); }
+                                    enabled: !AppState.is-recording && !AppState.is-processing;
+                                }
+                                Button {
+                                    text: AppState.is-zh ? "⏹ 停止" : "⏹ Stop";
+                                    clicked => { AppState.stop-recording(); }
+                                    enabled: AppState.is-recording;
+                                }
+
+                                // PTT button — gradient with animation
+                                ptt-rect := Rectangle {
+                                    width: 168px;
+                                    height: 40px;
+                                    border-radius: 6px;
+                                    background: ptt-ta.pressed
+                                        ? #b71c1c
+                                        : ptt-ta.has-hover
+                                            ? @linear-gradient(135deg, #ef5350, #c62828)
+                                            : @linear-gradient(135deg, #e53935, #b71c1c);
+                                    opacity: AppState.is-processing ? 0.40 : 1.0;
+                                    drop-shadow-blur: ptt-ta.has-hover ? 14px : 4px;
+                                    drop-shadow-color: #e5393560;
+                                    drop-shadow-offset-y: 2px;
+
+                                    Text {
+                                        text: AppState.is-zh ? "🎙 按住說話" : "🎙 Hold to Talk";
+                                        color: #ffffff;
+                                        font-size: 15px;
+                                        font-weight: 600;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    ptt-ta := TouchArea {
+                                        enabled: !AppState.is-processing;
+                                        pointer-event(event) => {
+                                            if (event.kind == PointerEventKind.down) {
+                                                AppState.start-recording();
+                                            }
+                                            if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                                if (AppState.is-recording) { AppState.stop-recording(); }
+                                            }
+                                        }
+                                    }
+                                    animate opacity { duration: 200ms; easing: ease; }
+                                    animate drop-shadow-blur { duration: 150ms; easing: ease; }
+                                }
+
+                                Button {
+                                    text: AppState.is-zh ? "📁 轉錄檔案" : "📁 File";
+                                    clicked => { AppState.transcribe-file(""); }
+                                    enabled: !AppState.is-recording && !AppState.is-processing;
+                                }
+
+                                // Status pill
+                                Rectangle {
+                                    width: 120px;
+                                    height: 36px;
+                                    border-radius: 18px;
+                                    background: AppState.is-recording
+                                        ? #f8514920
+                                        : AppState.is-processing
+                                            ? #e3b34120
+                                            : #3fb95020;
+                                    border-width: 1px;
+                                    border-color: AppState.is-recording
+                                        ? #f8514970
+                                        : AppState.is-processing
+                                            ? #e3b34170
+                                            : #3fb95070;
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        spacing: 6px;
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 7px;
+                                            height: 7px;
+                                            border-radius: 4px;
+                                            background: AppState.is-recording
+                                                ? Theme.danger
+                                                : AppState.is-processing
+                                                    ? Theme.warning
+                                                    : Theme.success;
+                                        }
+                                        Text {
+                                            text: AppState.is-recording
+                                                ? (AppState.is-zh ? "錄音中" : "REC")
+                                                : AppState.is-processing
+                                                    ? (AppState.is-zh ? "處理中" : "Working")
+                                                    : (AppState.is-zh ? "就緒" : "Ready");
+                                            font-size: 14px;
+                                            font-weight: 600;
+                                            color: AppState.is-recording
+                                                ? Theme.danger
+                                                : AppState.is-processing
+                                                    ? Theme.warning
+                                                    : Theme.success;
+                                        }
+                                    }
+                                    animate background { duration: 250ms; easing: ease; }
+                                    animate border-color { duration: 250ms; easing: ease; }
+                                }
+
+                                ProgressIndicator {
+                                    progress <=> AppState.progress;
+                                    indeterminate: AppState.progress <= 0.0 && AppState.is-processing;
+                                    visible: AppState.is-processing;
+                                }
+                            }
+
+                            Text {
+                                text: AppState.is-zh
+                                    ? "⌨  Ctrl+Shift+R：切換錄音　　Ctrl+Shift+Space：按住說話"
+                                    : "⌨  Ctrl+Shift+R: Toggle    Ctrl+Shift+Space: Hold to talk";
+                                font-size: 13px;
+                                color: Theme.text-dim;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Process log card
+                    SectionCard {
+                        header: AppState.is-zh ? "處理記錄" : "Process Log";
+                        TextEdit {
+                            height: 76px;
+                            text <=> AppState.process-log;
+                            read-only: true;
+                            font-size: 13px;
+                        }
+                    }
+
+                    // Transcription result card (stretches to fill remaining height)
+                    SectionCard {
+                        vertical-stretch: 1;
+                        header: AppState.is-zh ? "轉錄結果" : "Transcription";
+                        TextEdit {
+                            vertical-stretch: 1;
+                            min-height: 100px;
+                            text <=> AppState.transcribed-text;
+                            read-only: true;
+                            font-size: 16px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // ── SETTINGS TAB ─────────────────────────────────────────────
+            Tab {
+                title: AppState.is-zh ? "  設定  " : "  Settings  ";
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+
+                    // Send mode card
+                    SectionCard {
+                        header: AppState.is-zh ? "傳送模式" : "Send Mode";
+                        VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                ComboBox {
+                                    width: 150px;
+                                    model: ["clipboard", "file", "http-post", "active-window"];
+                                    current-value <=> AppState.settings.send_mode;
+                                }
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    text <=> AppState.settings.http_url;
+                                    placeholder-text: "HTTP URL";
+                                    visible: AppState.settings.send_mode == "http-post";
+                                }
+                                Text {
+                                    text: AppState.is-zh
+                                        ? "貼到快捷鍵前的焦點視窗（需用快捷鍵啟動錄音）"
+                                        : "Pastes to window focused before hotkey press";
+                                    font-size: 13px;
+                                    color: Theme.text-dim;
+                                    visible: AppState.settings.send_mode == "active-window";
+                                    vertical-alignment: center;
+                                }
+                            }
+                            HorizontalLayout {
+                                alignment: end;
+                                Button {
+                                    text: AppState.is-zh ? "立即傳送" : "Send Now";
+                                    clicked => { AppState.send-text(AppState.transcribed-text); }
+                                    enabled: AppState.transcribed-text != "";
+                                }
+                            }
+                        }
+                    }
+
+                    // Hotkeys card
+                    SectionCard {
+                        header: AppState.is-zh ? "快捷鍵設定" : "Hotkey Settings";
+                        VerticalLayout {
+                            spacing: 8px;
+                            CheckBox {
+                                text: AppState.is-zh
+                                    ? "啟用 Ctrl+Shift+R 切換錄音"
+                                    : "Enable Ctrl+Shift+R toggle recording";
+                                checked <=> AppState.settings.hotkey_toggle_enabled;
+                            }
+                            CheckBox {
+                                text: AppState.is-zh
+                                    ? "啟用 Ctrl+Shift+Space 按住說話（PTT）"
+                                    : "Enable Ctrl+Shift+Space press-to-talk (PTT)";
+                                checked <=> AppState.settings.hotkey_ptt_enabled;
+                            }
+                        }
+                    }
+
+                    // Output directory card
+                    SectionCard {
+                        header: AppState.is-zh ? "輸出目錄（存成檔案模式）" : "Output Directory (Save to File)";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: AppState.is-zh ? "路徑：" : "Path:";
+                                color: Theme.text;
+                                vertical-alignment: center;
+                                font-size: 15px;
+                            }
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text <=> AppState.settings.output_dir;
+                            }
+                        }
+                    }
+
+                    // Download models card
+                    SectionCard {
+                        header: AppState.is-zh ? "下載模型" : "Download Models";
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            Text {
+                                text: AppState.is-zh ? "選擇：" : "Select:";
+                                color: Theme.text;
+                                vertical-alignment: center;
+                                font-size: 15px;
+                            }
+                            ComboBox {
+                                width: 110px;
+                                model: ["tiny", "base", "small", "medium", "large-v3"];
+                                current-value <=> AppState.download-model-select;
+                            }
+                            Rectangle {
+                                width: 84px;
+                                height: 30px;
+                                border-radius: 5px;
+                                background: Theme.surface;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                Text {
+                                    text: AppState.download-model-select == "tiny"   ? "~75 MB"
+                                        : AppState.download-model-select == "base"   ? "~142 MB"
+                                        : AppState.download-model-select == "small"  ? "~466 MB"
+                                        : AppState.download-model-select == "medium" ? "~1.5 GB"
+                                        : "~3.1 GB";
+                                    font-size: 13px;
+                                    color: Theme.text-dim;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Button {
+                                text: AppState.is-zh ? "⬇ 下載" : "⬇ Download";
+                                enabled: !AppState.is-processing;
+                                clicked => { AppState.download-model(AppState.download-model-select); }
+                            }
+                        }
+                    }
+
+                    // Save / Load
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+                        Button {
+                            text: AppState.is-zh ? "💾 儲存設定" : "💾 Save Settings";
+                            clicked => { AppState.save-settings(); }
+                        }
+                        Button {
+                            text: AppState.is-zh ? "🔄 載入設定" : "🔄 Load Settings";
+                            clicked => { AppState.load-settings(); }
+                        }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+
+        // ── Status bar ────────────────────────────────────────────────────
+        Rectangle {
+            height: 36px;
+            background: Theme.surface;
+
+            Rectangle {
+                y: 0px;
+                height: 1px;
+                width: parent.width;
+                background: Theme.border;
+            }
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+                alignment: end;
+
+                // GPU usage in status bar (fallback display)
+                if AppState.gpu-usage != "": Text {
+                    text: "⚡ " + AppState.gpu-usage;
+                    font-size: 13px;
+                    color: Theme.success;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text <=> AppState.status;
+                    font-size: 13px;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text <=> AppState.memory-usage;
+                    font-size: 13px;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
