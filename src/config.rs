@@ -14,9 +14,16 @@ pub struct AppConfig {
     pub hotkey_toggle_enabled: bool,
     #[serde(default = "default_true")]
     pub hotkey_ptt_enabled: bool,
+    #[serde(default = "default_true")]
+    pub correction_enabled: bool,
+    #[serde(default)]
+    pub gain_enabled: bool,
+    #[serde(default = "default_gain_level")]
+    pub gain_level: f32,
 }
 
 fn default_true() -> bool { true }
+fn default_gain_level() -> f32 { 2.0 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SendMode {
@@ -38,6 +45,9 @@ impl Default for AppConfig {
             output_dir: String::from("output"),
             hotkey_toggle_enabled: true,
             hotkey_ptt_enabled: true,
+            correction_enabled: true,
+            gain_enabled: false,
+            gain_level: 2.0,
         }
     }
 }

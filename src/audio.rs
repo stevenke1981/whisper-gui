@@ -62,5 +62,9 @@ impl AudioRecorder {
     pub fn is_recording(&self) -> bool {
         self.stream.is_some()
     }
+}
 
+/// Multiply every sample by `gain`, clamping to [-1.0, 1.0] to prevent clipping.
+pub fn apply_gain(samples: Vec<f32>, gain: f32) -> Vec<f32> {
+    samples.into_iter().map(|s| (s * gain).clamp(-1.0, 1.0)).collect()
 }

@@ -176,8 +176,19 @@ pub fn setup_commands(
             let http_url = config.borrow().http_url.clone();
             let output_dir = config.borrow().output_dir.clone();
             let hwnd = *target_hwnd.lock().unwrap();
+            let correction_enabled = config.borrow().correction_enabled;
+            let gain_enabled = config.borrow().gain_enabled;
+            let gain_level = config.borrow().gain_level;
+            let is_zh = state.get_is_zh();
             let ui_weak2 = ui_weak.clone();
             let engine2 = engine.clone();
+
+            // Apply recording gain before handing audio to Whisper
+            let audio_data = if gain_enabled && gain_level > 1.0 {
+                crate::audio::apply_gain(audio_data, gain_level)
+            } else {
+                audio_data
+            };
 
             std::thread::spawn(move || {
                 let t_total = std::time::Instant::now();
@@ -207,6 +218,16 @@ pub fn setup_commands(
                 let total_ms = t_total.elapsed().as_millis();
                 drop(guard);
 
+                // Auto-correct in background thread (before UI update) if enabled
+                let (result, correction_log) = match result {
+                    Ok((text, elapsed)) if correction_enabled => {
+                        let cr = crate::correction::correct_text(&text, &language);
+                        let log = cr.log_line(is_zh);
+                        (Ok((cr.text, elapsed)), Some(log))
+                    }
+                    other => (other, None),
+                };
+
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak2.upgrade() {
                         let state = ui.global::<crate::AppState>();
@@ -224,6 +245,9 @@ pub fn setup_commands(
                                     "完成：辨識 {:.2}s | 推論 {}ms | 總計 {}ms | 音訊 {:.2}s | {}",
                                     elapsed, infer_ms, total_ms, duration_secs, send_msg
                                 ));
+                                if let Some(ref log) = correction_log {
+                                    log_append(&state, log);
+                                }
                                 state.set_status(SharedString::from(format!(
                                     "完成 辨識:{:.1}s（音訊:{:.1}s  推論:{}ms）→ {}",
                                     elapsed, duration_secs, infer_ms, send_msg
@@ -402,10 +426,51 @@ pub fn setup_commands(
                 cfg.output_dir = settings.output_dir.to_string();
                 cfg.hotkey_toggle_enabled = settings.hotkey_toggle_enabled;
                 cfg.hotkey_ptt_enabled = settings.hotkey_ptt_enabled;
+                cfg.correction_enabled = settings.correction_enabled;
+                cfg.gain_enabled = settings.gain_enabled;
+                cfg.gain_level = settings.gain_level;
                 if let Err(e) = cfg.save() {
                     eprintln!("Failed to save config: {}", e);
                 }
             }
+        }
+    });
+
+    ui.global::<crate::AppState>().on_correct_text({
+        let ui_weak = ui_weak.clone();
+
+        move || {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let state = ui.global::<crate::AppState>();
+
+            let text = state.get_transcribed_text().to_string();
+            if text.trim().is_empty() {
+                state.set_status(SharedString::from("沒有文字可校正"));
+                return;
+            }
+
+            let language = state.get_settings().language.to_string();
+            let is_zh = state.get_is_zh();
+            state.set_is_processing(true);
+            state.set_status(SharedString::from(if is_zh { "校正中..." } else { "Correcting..." }));
+
+            let ui_weak2 = ui_weak.clone();
+
+            std::thread::spawn(move || {
+                let result = crate::correction::correct_text(&text, &language);
+                let corrected = result.text.clone();
+                let summary = result.log_line(is_zh);
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak2.upgrade() {
+                        let state = ui.global::<crate::AppState>();
+                        state.set_transcribed_text(SharedString::from(corrected));
+                        log_append(&state, &summary);
+                        state.set_status(SharedString::from(summary));
+                        state.set_is_processing(false);
+                    }
+                });
+            });
         }
     });
 
@@ -427,6 +492,9 @@ pub fn setup_commands(
                     settings.output_dir = cfg.output_dir.clone().into();
                     settings.hotkey_toggle_enabled = cfg.hotkey_toggle_enabled;
                     settings.hotkey_ptt_enabled = cfg.hotkey_ptt_enabled;
+                    settings.correction_enabled = cfg.correction_enabled;
+                    settings.gain_enabled = cfg.gain_enabled;
+                    settings.gain_level = cfg.gain_level;
                     state.set_settings(settings);
                 }
                 *config.borrow_mut() = cfg;

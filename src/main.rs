@@ -3,6 +3,7 @@
 mod commands;
 mod config;
 mod audio;
+mod correction;
 mod hotkeys;
 mod send;
 mod whisper;
@@ -80,6 +81,9 @@ fn sync_config_to_ui(ui: &AppWindow, config: &config::AppConfig) {
     settings.output_dir = config.output_dir.clone().into();
     settings.hotkey_toggle_enabled = config.hotkey_toggle_enabled;
     settings.hotkey_ptt_enabled = config.hotkey_ptt_enabled;
+    settings.correction_enabled = config.correction_enabled;
+    settings.gain_enabled = config.gain_enabled;
+    settings.gain_level = config.gain_level;
     state.set_settings(settings);
     state.set_current_model(extract_model_name(&config.model_path).into());
     state.set_current_language(config.language.clone().into());
