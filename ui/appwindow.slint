@@ -12,29 +12,30 @@ export struct Settings {
     hotkey_ptt_enabled: bool,
     correction_enabled: bool,
     gain_enabled: bool,
-    gain_level: float,
+    languagetool_enabled: bool,
 }
 
-// ── Light / Dark theme palette ────────────────────────────────────────────
+// ── Light / Dark / High-Contrast theme palette ───────────────────────────
 global Theme {
     in-out property <bool> dark: true;
+    in-out property <bool> hc: false;   // high-contrast
 
-    out property <color> bg:         dark ? #0d1117 : #f6f8fa;
-    out property <color> surface:    dark ? #161b22 : #ffffff;
-    out property <color> card:       dark ? #21262d : #ffffff;
-    out property <color> border:     dark ? #30363d : #d0d7de;
+    out property <color> bg:         hc ? #000000 : (dark ? #0d1117 : #f6f8fa);
+    out property <color> surface:    hc ? #111111 : (dark ? #161b22 : #ffffff);
+    out property <color> card:       hc ? #1a1a1a : (dark ? #21262d : #ffffff);
+    out property <color> border:     hc ? #888888 : (dark ? #30363d : #d0d7de);
 
-    out property <color> accent:     dark ? #388bfd : #0969da;
-    out property <color> accent-dim: dark ? #1c4591 : #ddf4ff;
+    out property <color> accent:     hc ? #ffd700 : (dark ? #388bfd : #0969da);
+    out property <color> accent-dim: hc ? #3d3000 : (dark ? #1c4591 : #ddf4ff);
 
-    out property <color> text:       dark ? #c9d1d9 : #1f2328;
-    out property <color> text-dim:   dark ? #8b949e : #656d76;
+    out property <color> text:       hc ? #ffffff : (dark ? #c9d1d9 : #1f2328);
+    out property <color> text-dim:   hc ? #dddddd : (dark ? #8b949e : #656d76);
 
-    out property <color> success:    dark ? #3fb950 : #1a7f37;
-    out property <color> danger:     dark ? #f85149 : #d1242f;
-    out property <color> warning:    dark ? #e3b341 : #9a6700;
+    out property <color> success:    hc ? #00ff88 : (dark ? #3fb950 : #1a7f37);
+    out property <color> danger:     hc ? #ff5555 : (dark ? #f85149 : #d1242f);
+    out property <color> warning:    hc ? #ffcc00 : (dark ? #e3b341 : #9a6700);
 
-    out property <color> shadow:     dark ? #00000050 : #0000001a;
+    out property <color> shadow:     hc ? #00000000 : (dark ? #00000050 : #0000001a);
 }
 
 // ── Reusable styled card ──────────────────────────────────────────────────
@@ -70,14 +71,16 @@ export global AppState {
     in-out property <float>    progress: 0.0;
     in-out property <bool>     is-recording: false;
     in-out property <bool>     is-processing: false;
-    in-out property <string>   current-model: "tiny";
+    in-out property <string>   current-model: "medium";
     in-out property <string>   current-language: "auto";
     in-out property <string>   memory-usage: "";
     in-out property <string>   gpu-usage: "";
     in-out property <bool>     is-zh: true;
-    in-out property <string>   download-model-select: "tiny";
+    in-out property <string>   download-model-select: "medium";
+    in-out property <float>    gain-level: 2.0;
+    in-out property <string>   opencc-mode: "";   // "" | "s2twp" | "t2sp"
     in-out property <Settings> settings: {
-        model_path: "models/ggml-tiny.bin",
+        model_path: "models/ggml-medium.bin",
         language: "auto",
         send_mode: "clipboard",
         http_url: "",
@@ -88,8 +91,21 @@ export global AppState {
         hotkey_ptt_enabled: true,
         correction_enabled: true,
         gain_enabled: false,
-        gain_level: 2.0,
+        languagetool_enabled: true,
     };
+
+    in-out property <bool>   download-model-exists: false;
+    in-out property <bool>   dict-en-exists: false;
+    in-out property <bool>   dict-en-downloading: false;
+    // ── Whisper engine params ────────────────────────────────────────────────
+    in-out property <float>  whisper-temperature: 0.0;
+    in-out property <float>  whisper-beam-size: 5.0;
+    in-out property <float>  whisper-best-of: 5.0;
+    in-out property <float>  whisper-max-len: 0.0;
+    in-out property <bool>   whisper-no-context: false;
+    in-out property <bool>   whisper-single-segment: false;
+    in-out property <bool>   whisper-word-timestamps: false;
+    in-out property <string> whisper-initial-prompt: "";
 
     callback transcribe-file(string);
     callback start-recording();
@@ -102,6 +118,9 @@ export global AppState {
     callback download-model(string);
     callback preset-model-selected(string);
     callback correct-text();
+    callback check-model-exists(string);
+    callback download-dict(string);
+    callback check-dict-exists();
 }
 
 export component AppWindow inherits Window {
@@ -173,7 +192,7 @@ export component AppWindow inherits Window {
                         width: 90px;
                         height: 24px;
                         border-radius: 12px;
-                        background: Theme.dark ? #0d2a0d : #dcfce7;
+                        background: Theme.hc ? #001a0a : (Theme.dark ? #0d2a0d : #dcfce7);
                         border-width: 1px;
                         border-color: Theme.success;
                         HorizontalLayout {
@@ -211,7 +230,12 @@ export component AppWindow inherits Window {
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
-                        theme-ta := TouchArea { clicked => { Theme.dark = !Theme.dark; } }
+                        theme-ta := TouchArea {
+                            clicked => {
+                                Theme.hc = false;
+                                Theme.dark = !Theme.dark;
+                            }
+                        }
                         animate background { duration: 120ms; easing: ease; }
                     }
 
@@ -305,7 +329,7 @@ export component AppWindow inherits Window {
                                 Rectangle {
                                     width: 76px; height: 24px;
                                     border-radius: 12px;
-                                    background: Theme.dark ? #0d2a0d : #dcfce7;
+                                    background: Theme.hc ? #001a0a : (Theme.dark ? #0d2a0d : #dcfce7);
                                     border-width: 1px;
                                     border-color: Theme.success;
                                     Text {
@@ -324,77 +348,115 @@ export component AppWindow inherits Window {
                         SectionCard {
                             header: AppState.is-zh ? "音訊輸入" : "Audio Input";
                             VerticalLayout {
-                                spacing: 8px;
+                                spacing: 10px;
 
-                                // Row 1: record controls + PTT + file
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    alignment: center;
+                                // Row 1: PTT — full-width hero button
+                                ptt-rect := Rectangle {
+                                    height: 52px;
+                                    border-radius: 8px;
+                                    background: ptt-ta.pressed
+                                        ? #b71c1c
+                                        : ptt-ta.has-hover
+                                            ? @linear-gradient(135deg, #ef5350, #c62828)
+                                            : @linear-gradient(135deg, #e53935, #b71c1c);
+                                    opacity: AppState.is-processing ? 0.38 : 1.0;
+                                    drop-shadow-blur: ptt-ta.has-hover ? 16px : 4px;
+                                    drop-shadow-color: #e5393570;
+                                    drop-shadow-offset-y: 3px;
 
-                                    Button {
-                                        text: AppState.is-zh ? "🎤 錄音" : "🎤 Rec";
-                                        clicked => { AppState.start-recording(); }
-                                        enabled: !AppState.is-recording && !AppState.is-processing;
-                                    }
-                                    Button {
-                                        text: AppState.is-zh ? "⏹ 停止" : "⏹ Stop";
-                                        clicked => { AppState.stop-recording(); }
-                                        enabled: AppState.is-recording;
-                                    }
-
-                                    ptt-rect := Rectangle {
-                                        width: 150px;
-                                        height: 36px;
-                                        border-radius: 6px;
-                                        background: ptt-ta.pressed
-                                            ? #b71c1c
-                                            : ptt-ta.has-hover
-                                                ? @linear-gradient(135deg, #ef5350, #c62828)
-                                                : @linear-gradient(135deg, #e53935, #b71c1c);
-                                        opacity: AppState.is-processing ? 0.40 : 1.0;
-                                        drop-shadow-blur: ptt-ta.has-hover ? 12px : 3px;
-                                        drop-shadow-color: #e5393560;
-                                        drop-shadow-offset-y: 2px;
-
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: center;
                                         Text {
-                                            text: AppState.is-zh ? "🎙 按住說話" : "🎙 Hold PTT";
-                                            color: #ffffff;
-                                            font-size: 13px;
-                                            font-weight: 600;
-                                            horizontal-alignment: center;
+                                            text: "🎙";
+                                            font-size: 20px;
                                             vertical-alignment: center;
                                         }
-                                        ptt-ta := TouchArea {
-                                            enabled: !AppState.is-processing;
-                                            pointer-event(event) => {
-                                                if (event.kind == PointerEventKind.down) {
-                                                    AppState.start-recording();
-                                                }
-                                                if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
-                                                    if (AppState.is-recording) { AppState.stop-recording(); }
-                                                }
+                                        Text {
+                                            text: AppState.is-zh ? "按住說話（PTT）" : "Hold to Talk (PTT)";
+                                            color: #ffffff;
+                                            font-size: 15px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    ptt-ta := TouchArea {
+                                        enabled: !AppState.is-processing;
+                                        pointer-event(event) => {
+                                            if (event.kind == PointerEventKind.down) {
+                                                AppState.start-recording();
+                                            }
+                                            if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                                if (AppState.is-recording) { AppState.stop-recording(); }
                                             }
                                         }
-                                        animate opacity { duration: 200ms; easing: ease; }
-                                        animate drop-shadow-blur { duration: 150ms; easing: ease; }
                                     }
-
-                                    Button {
-                                        text: AppState.is-zh ? "📁 檔案" : "📁 File";
-                                        clicked => { AppState.transcribe-file(""); }
-                                        enabled: !AppState.is-recording && !AppState.is-processing;
-                                    }
+                                    animate opacity { duration: 200ms; easing: ease; }
+                                    animate drop-shadow-blur { duration: 150ms; easing: ease; }
                                 }
 
-                                // Row 2: status pill + progress
+                                // Row 2: Start | Stop | spacer | File
                                 HorizontalLayout {
                                     spacing: 8px;
-                                    alignment: center;
 
+                                    rec-btn := Rectangle {
+                                        width: 110px; height: 36px;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: AppState.is-recording ? Theme.danger : Theme.border;
+                                        background: rec-ta.has-hover
+                                            ? (AppState.is-recording ? #f8514920 : Theme.border)
+                                            : Theme.surface;
+                                        opacity: (!AppState.is-recording && !AppState.is-processing) ? 1.0 : 0.45;
+                                        HorizontalLayout {
+                                            spacing: 5px; alignment: center;
+                                            Text { text: "🎤"; font-size: 14px; vertical-alignment: center; }
+                                            Text {
+                                                text: AppState.is-zh ? "開始錄音" : "Record";
+                                                font-size: 13px; font-weight: 600;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        rec-ta := TouchArea {
+                                            enabled: !AppState.is-recording && !AppState.is-processing;
+                                            clicked => { AppState.start-recording(); }
+                                        }
+                                        animate background { duration: 120ms; easing: ease; }
+                                    }
+
+                                    stop-btn := Rectangle {
+                                        width: 110px; height: 36px;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: AppState.is-recording ? Theme.danger : Theme.border;
+                                        background: stop-ta.has-hover && AppState.is-recording
+                                            ? #f8514920
+                                            : Theme.surface;
+                                        opacity: AppState.is-recording ? 1.0 : 0.40;
+                                        HorizontalLayout {
+                                            spacing: 5px; alignment: center;
+                                            Text { text: "⏹"; font-size: 14px; vertical-alignment: center; }
+                                            Text {
+                                                text: AppState.is-zh ? "停止錄音" : "Stop";
+                                                font-size: 13px; font-weight: 600;
+                                                color: AppState.is-recording ? Theme.danger : Theme.text;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        stop-ta := TouchArea {
+                                            enabled: AppState.is-recording;
+                                            clicked => { AppState.stop-recording(); }
+                                        }
+                                        animate background { duration: 120ms; easing: ease; }
+                                        animate border-color { duration: 150ms; easing: ease; }
+                                    }
+
+                                    // Status pill (stretches to fill middle)
                                     Rectangle {
-                                        width: 110px;
-                                        height: 32px;
-                                        border-radius: 16px;
+                                        horizontal-stretch: 1;
+                                        height: 36px;
+                                        border-radius: 18px;
                                         background: AppState.is-recording
                                             ? #f8514920
                                             : AppState.is-processing ? #e3b34120 : #3fb95020;
@@ -402,14 +464,12 @@ export component AppWindow inherits Window {
                                         border-color: AppState.is-recording
                                             ? #f8514970
                                             : AppState.is-processing ? #e3b34170 : #3fb95070;
-
                                         HorizontalLayout {
-                                            padding-left: 8px; padding-right: 8px;
-                                            spacing: 5px;
-                                            alignment: center;
+                                            padding-left: 10px; padding-right: 10px;
+                                            spacing: 6px; alignment: center;
                                             Rectangle {
-                                                width: 6px; height: 6px;
-                                                border-radius: 3px;
+                                                width: 7px; height: 7px;
+                                                border-radius: 4px;
                                                 background: AppState.is-recording
                                                     ? Theme.danger
                                                     : AppState.is-processing ? Theme.warning : Theme.success;
@@ -420,29 +480,51 @@ export component AppWindow inherits Window {
                                                     : AppState.is-processing
                                                         ? (AppState.is-zh ? "處理中" : "Working")
                                                         : (AppState.is-zh ? "就緒" : "Ready");
-                                                font-size: 13px;
-                                                font-weight: 600;
+                                                font-size: 13px; font-weight: 600;
                                                 color: AppState.is-recording
                                                     ? Theme.danger
                                                     : AppState.is-processing ? Theme.warning : Theme.success;
+                                            }
+                                            if AppState.is-processing: ProgressIndicator {
+                                                progress <=> AppState.progress;
+                                                indeterminate: AppState.progress <= 0.0;
                                             }
                                         }
                                         animate background { duration: 250ms; easing: ease; }
                                         animate border-color { duration: 250ms; easing: ease; }
                                     }
 
-                                    ProgressIndicator {
-                                        progress <=> AppState.progress;
-                                        indeterminate: AppState.progress <= 0.0 && AppState.is-processing;
-                                        visible: AppState.is-processing;
+                                    file-btn := Rectangle {
+                                        width: 100px; height: 36px;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        background: file-ta.has-hover ? Theme.border : Theme.surface;
+                                        opacity: (!AppState.is-recording && !AppState.is-processing) ? 1.0 : 0.45;
+                                        HorizontalLayout {
+                                            spacing: 5px; alignment: center;
+                                            Text { text: "📁"; font-size: 14px; vertical-alignment: center; }
+                                            Text {
+                                                text: AppState.is-zh ? "開啟檔案" : "Open File";
+                                                font-size: 13px; font-weight: 600;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        file-ta := TouchArea {
+                                            enabled: !AppState.is-recording && !AppState.is-processing;
+                                            clicked => { AppState.transcribe-file(""); }
+                                        }
+                                        animate background { duration: 120ms; easing: ease; }
                                     }
                                 }
 
+                                // Row 3: hotkey hint
                                 Text {
                                     text: AppState.is-zh
                                         ? "⌨  Ctrl+Shift+R：切換錄音　　Ctrl+Shift+Space：按住說話"
                                         : "⌨  Ctrl+Shift+R: Toggle    Ctrl+Shift+Space: Hold PTT";
-                                    font-size: 12px;
+                                    font-size: 11px;
                                     color: Theme.text-dim;
                                     horizontal-alignment: center;
                                 }
@@ -590,22 +672,342 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        // Correction settings card
+                        // ── Whisper 引擎參數 card ──────────────────────────
                         SectionCard {
-                            header: AppState.is-zh ? "校正功能" : "Text Correction";
+                            header: AppState.is-zh ? "Whisper 引擎參數" : "Whisper Engine Parameters";
+                            VerticalLayout {
+                                spacing: 10px;
+
+                                // Initial Prompt
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    Text {
+                                        text: AppState.is-zh ? "初始提示詞（Initial Prompt）：" : "Initial Prompt:";
+                                        font-size: 12px;
+                                        color: Theme.text-dim;
+                                    }
+                                    LineEdit {
+                                        text <=> AppState.whisper-initial-prompt;
+                                        placeholder-text: AppState.is-zh
+                                            ? "例：這是台灣繁體中文會議，討論 Rust、AI 語音辨識…"
+                                            : "e.g. This is a tech meeting about Rust and AI…";
+                                    }
+                                }
+
+                                // Temperature
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    Text {
+                                        text: AppState.is-zh ? "溫度 Temperature：" : "Temperature:";
+                                        font-size: 13px;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        min-width: 140px;
+                                    }
+                                    Slider {
+                                        horizontal-stretch: 1;
+                                        minimum: 0.0;
+                                        maximum: 1.0;
+                                        value <=> AppState.whisper-temperature;
+                                    }
+                                    Rectangle {
+                                        width: 46px; height: 24px;
+                                        border-radius: 5px;
+                                        background: Theme.accent-dim;
+                                        border-width: 1px;
+                                        border-color: Theme.accent;
+                                        Text {
+                                            text: AppState.whisper-temperature + "";
+                                            font-size: 12px; font-weight: 700;
+                                            color: Theme.accent;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                // Beam Size
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    Text {
+                                        text: AppState.is-zh ? "Beam Size 搜尋寬度：" : "Beam Size:";
+                                        font-size: 13px;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        min-width: 140px;
+                                    }
+                                    Slider {
+                                        horizontal-stretch: 1;
+                                        minimum: 1.0;
+                                        maximum: 10.0;
+                                        value <=> AppState.whisper-beam-size;
+                                    }
+                                    Rectangle {
+                                        width: 46px; height: 24px;
+                                        border-radius: 5px;
+                                        background: Theme.accent-dim;
+                                        border-width: 1px;
+                                        border-color: Theme.accent;
+                                        Text {
+                                            text: AppState.whisper-beam-size + "";
+                                            font-size: 12px; font-weight: 700;
+                                            color: Theme.accent;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                // Best Of
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    Text {
+                                        text: AppState.is-zh ? "Best Of 取樣數：" : "Best Of (samples):";
+                                        font-size: 13px;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        min-width: 140px;
+                                    }
+                                    Slider {
+                                        horizontal-stretch: 1;
+                                        minimum: 1.0;
+                                        maximum: 10.0;
+                                        value <=> AppState.whisper-best-of;
+                                    }
+                                    Rectangle {
+                                        width: 46px; height: 24px;
+                                        border-radius: 5px;
+                                        background: Theme.accent-dim;
+                                        border-width: 1px;
+                                        border-color: Theme.accent;
+                                        Text {
+                                            text: AppState.whisper-best-of + "";
+                                            font-size: 12px; font-weight: 700;
+                                            color: Theme.accent;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                // Max Segment Length
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    Text {
+                                        text: AppState.is-zh ? "最大段落長度（0=無限）：" : "Max Segment Length (0=∞):";
+                                        font-size: 13px;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        min-width: 140px;
+                                    }
+                                    Slider {
+                                        horizontal-stretch: 1;
+                                        minimum: 0.0;
+                                        maximum: 200.0;
+                                        value <=> AppState.whisper-max-len;
+                                    }
+                                    Rectangle {
+                                        width: 46px; height: 24px;
+                                        border-radius: 5px;
+                                        background: Theme.accent-dim;
+                                        border-width: 1px;
+                                        border-color: Theme.accent;
+                                        Text {
+                                            text: AppState.whisper-max-len < 1.0
+                                                ? "∞"
+                                                : (AppState.whisper-max-len + "");
+                                            font-size: 12px; font-weight: 700;
+                                            color: Theme.accent;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                // CheckBoxes
+                                VerticalLayout {
+                                    spacing: 6px;
+                                    CheckBox {
+                                        text: AppState.is-zh
+                                            ? "不使用前文脈絡（No Context）"
+                                            : "No context (ignore previous segment context)";
+                                        checked <=> AppState.whisper-no-context;
+                                    }
+                                    CheckBox {
+                                        text: AppState.is-zh
+                                            ? "強制單段落輸出（Single Segment）"
+                                            : "Single segment output";
+                                        checked <=> AppState.whisper-single-segment;
+                                    }
+                                    CheckBox {
+                                        text: AppState.is-zh
+                                            ? "啟用逐字時間戳（Word Timestamps）"
+                                            : "Enable word-level timestamps";
+                                        checked <=> AppState.whisper-word-timestamps;
+                                    }
+                                }
+
+                                Text {
+                                    text: AppState.is-zh
+                                        ? "Beam Size ≥ 2 時使用 BeamSearch（準確但較慢）；溫度 0.0 最具確定性；初始提示詞可顯著提升領域詞彙與人名準確度。"
+                                        : "Beam Size ≥ 2 uses BeamSearch (accurate, slower). Temperature 0.0 is most deterministic. Initial prompt greatly boosts domain/proper noun accuracy.";
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        // ── 本地校正 card（SymSpell + Harper）─────────────
+                        SectionCard {
+                            header: AppState.is-zh ? "本地校正（SymSpell + Harper）" : "Local Correction (SymSpell + Harper)";
                             VerticalLayout {
                                 spacing: 8px;
                                 CheckBox {
                                     text: AppState.is-zh
-                                        ? "啟用轉錄後自動校正（SymSpell + Harper + LanguageTool）"
-                                        : "Auto-correct after transcription (SymSpell + Harper + LanguageTool)";
+                                        ? "啟用轉錄後自動校正（SymSpell 拼字 + Harper 語法）"
+                                        : "Auto-correct after transcription (SymSpell spell + Harper grammar)";
                                     checked <=> AppState.settings.correction_enabled;
                                 }
                                 if AppState.settings.correction_enabled: Text {
                                     text: AppState.is-zh
-                                        ? "⚠ LanguageTool 需要網路連線。英文拼字校正需在 dicts/ 目錄放置字典檔。"
-                                        : "⚠ LanguageTool requires internet. Spell check needs a dict file in dicts/.";
+                                        ? "SymSpell 英文拼字校正需在 dicts/ 放置字典檔（見下方「字典檔」）。Harper 語法提示不自動修改文字。"
+                                        : "SymSpell requires a dict file in dicts/ (see 'Dictionary' below). Harper grammar hints are shown in the log only.";
                                     font-size: 12px;
+                                    color: Theme.text-dim;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        // ── LanguageTool card（獨立）────────────────────────
+                        SectionCard {
+                            header: "LanguageTool";
+                            VerticalLayout {
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    CheckBox {
+                                        text: AppState.is-zh
+                                            ? "啟用 LanguageTool 線上語法校正"
+                                            : "Enable LanguageTool online grammar correction";
+                                        checked <=> AppState.settings.languagetool_enabled;
+                                    }
+                                    // online indicator
+                                    Rectangle {
+                                        width: 64px; height: 24px;
+                                        border-radius: 12px;
+                                        background: AppState.settings.languagetool_enabled
+                                            ? (Theme.hc ? #001a0a : (Theme.dark ? #0d2a0d : #dcfce7))
+                                            : Theme.surface;
+                                        border-width: 1px;
+                                        border-color: AppState.settings.languagetool_enabled ? Theme.success : Theme.border;
+                                        Text {
+                                            text: AppState.settings.languagetool_enabled
+                                                ? (AppState.is-zh ? "🌐 啟用" : "🌐 On")
+                                                : (AppState.is-zh ? "停用" : "Off");
+                                            font-size: 11px; font-weight: 600;
+                                            color: AppState.settings.languagetool_enabled ? Theme.success : Theme.text-dim;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                                if AppState.settings.languagetool_enabled: Text {
+                                    text: AppState.is-zh
+                                        ? "⚠ 需要網路連線，預設使用 api.languagetool.org 公開服務。本地伺服器請設定環境變數 LANGUAGETOOL_HOSTNAME / LANGUAGETOOL_PORT。"
+                                        : "⚠ Requires internet. Defaults to api.languagetool.org. For a local server set env vars LANGUAGETOOL_HOSTNAME / LANGUAGETOOL_PORT.";
+                                    font-size: 12px;
+                                    color: Theme.text-dim;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        // ── 字典檔 card ─────────────────────────────────────
+                        SectionCard {
+                            header: AppState.is-zh ? "字典檔（SymSpell）" : "Dictionary Files (SymSpell)";
+                            VerticalLayout {
+                                spacing: 10px;
+
+                                // English dict row
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+
+                                    Text {
+                                        text: "English";
+                                        font-size: 13px; font-weight: 600;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        min-width: 70px;
+                                    }
+                                    Text {
+                                        text: "en_frequency.txt";
+                                        font-size: 12px;
+                                        color: Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                    // exists / absent badge
+                                    Rectangle {
+                                        width: 68px; height: 26px;
+                                        border-radius: 13px;
+                                        background: AppState.dict-en-exists
+                                            ? (Theme.hc ? #001a0a : (Theme.dark ? #0d2a0d : #dcfce7))
+                                            : (Theme.hc ? #1a0000 : (Theme.dark ? #2a0d0d : #fff0f0));
+                                        border-width: 1px;
+                                        border-color: AppState.dict-en-exists ? Theme.success : Theme.danger;
+                                        Text {
+                                            text: AppState.dict-en-exists
+                                                ? (AppState.is-zh ? "✓ 已存在" : "✓ Ready")
+                                                : (AppState.is-zh ? "✕ 未下載" : "✕ Missing");
+                                            font-size: 11px; font-weight: 600;
+                                            color: AppState.dict-en-exists ? Theme.success : Theme.danger;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    // download / loading button
+                                    dl-dict-btn := Rectangle {
+                                        width: 88px; height: 30px;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: AppState.dict-en-exists ? Theme.border : Theme.accent;
+                                        background: dl-dict-ta.has-hover && !AppState.dict-en-downloading
+                                            ? Theme.accent-dim
+                                            : Theme.surface;
+                                        opacity: AppState.dict-en-downloading ? 0.5 : 1.0;
+                                        Text {
+                                            text: AppState.dict-en-downloading
+                                                ? (AppState.is-zh ? "下載中…" : "Downloading…")
+                                                : AppState.dict-en-exists
+                                                    ? (AppState.is-zh ? "↺ 重新下載" : "↺ Re-download")
+                                                    : (AppState.is-zh ? "⬇ 下載" : "⬇ Download");
+                                            font-size: 12px; font-weight: 600;
+                                            color: AppState.dict-en-exists ? Theme.text-dim : Theme.accent;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        dl-dict-ta := TouchArea {
+                                            enabled: !AppState.dict-en-downloading;
+                                            clicked => { AppState.download-dict("en"); }
+                                        }
+                                        animate background { duration: 120ms; easing: ease; }
+                                        animate opacity { duration: 150ms; easing: ease; }
+                                    }
+                                }
+
+                                Text {
+                                    text: AppState.is-zh
+                                        ? "字典檔儲存於程式目錄下的 dicts/ 資料夾（~30 MB）。"
+                                        : "Files saved to dicts/ folder next to the executable (~30 MB).";
+                                    font-size: 11px;
                                     color: Theme.text-dim;
                                     wrap: word-wrap;
                                 }
@@ -638,7 +1040,7 @@ export component AppWindow inherits Window {
                                         horizontal-stretch: 1;
                                         minimum: 1.0;
                                         maximum: 8.0;
-                                        value <=> AppState.settings.gain_level;
+                                        value <=> AppState.gain-level;
                                     }
                                     Rectangle {
                                         width: 48px;
@@ -648,7 +1050,7 @@ export component AppWindow inherits Window {
                                         border-width: 1px;
                                         border-color: Theme.accent;
                                         Text {
-                                            text: AppState.settings.gain_level + "×";
+                                            text: AppState.gain-level + "×";
                                             font-size: 12px;
                                             font-weight: 700;
                                             color: Theme.accent;
@@ -681,43 +1083,246 @@ export component AppWindow inherits Window {
                         // Download models card
                         SectionCard {
                             header: AppState.is-zh ? "下載模型" : "Download Models";
+                            VerticalLayout {
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Text {
+                                        text: AppState.is-zh ? "選擇：" : "Select:";
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        font-size: 14px;
+                                    }
+                                    ComboBox {
+                                        width: 110px;
+                                        model: ["tiny", "base", "small", "medium", "large-v3"];
+                                        current-value <=> AppState.download-model-select;
+                                        selected(v) => { AppState.check-model-exists(v); }
+                                    }
+                                    // Size badge
+                                    Rectangle {
+                                        width: 68px;
+                                        height: 28px;
+                                        border-radius: 5px;
+                                        background: Theme.surface;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        Text {
+                                            text: AppState.download-model-select == "tiny"   ? "~75 MB"
+                                                : AppState.download-model-select == "base"   ? "~142 MB"
+                                                : AppState.download-model-select == "small"  ? "~466 MB"
+                                                : AppState.download-model-select == "medium" ? "~1.5 GB"
+                                                : "~3.1 GB";
+                                            font-size: 12px;
+                                            color: Theme.text-dim;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    // Exists badge
+                                    if AppState.download-model-exists: Rectangle {
+                                        width: 72px; height: 28px;
+                                        border-radius: 5px;
+                                        background: Theme.hc ? #001a0a : (Theme.dark ? #0d2a0d : #dcfce7);
+                                        border-width: 1px;
+                                        border-color: Theme.success;
+                                        Text {
+                                            text: AppState.is-zh ? "✓ 已下載" : "✓ Exists";
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                            color: Theme.success;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    Button {
+                                        text: AppState.download-model-exists
+                                            ? (AppState.is-zh ? "▶ 載入" : "▶ Load")
+                                            : (AppState.is-zh ? "⬇ 下載" : "⬇ Download");
+                                        enabled: !AppState.is-processing;
+                                        clicked => { AppState.download-model(AppState.download-model-select); }
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── 佈景主題 card ──────────────────────────────────
+                        SectionCard {
+                            header: AppState.is-zh ? "佈景主題" : "Theme";
                             HorizontalLayout {
                                 spacing: 8px;
                                 alignment: start;
-                                Text {
-                                    text: AppState.is-zh ? "選擇：" : "Select:";
-                                    color: Theme.text;
-                                    vertical-alignment: center;
-                                    font-size: 14px;
-                                }
-                                ComboBox {
-                                    width: 110px;
-                                    model: ["tiny", "base", "small", "medium", "large-v3"];
-                                    current-value <=> AppState.download-model-select;
-                                }
-                                Rectangle {
-                                    width: 78px;
-                                    height: 28px;
-                                    border-radius: 5px;
-                                    background: Theme.surface;
+
+                                // Dark
+                                dark-btn := Rectangle {
+                                    width: 80px; height: 32px;
+                                    border-radius: 6px;
                                     border-width: 1px;
-                                    border-color: Theme.border;
+                                    border-color: (Theme.dark && !Theme.hc) ? Theme.accent : Theme.border;
+                                    background: (Theme.dark && !Theme.hc)
+                                        ? Theme.accent-dim
+                                        : (dark-ta.has-hover ? Theme.border : Theme.surface);
                                     Text {
-                                        text: AppState.download-model-select == "tiny"   ? "~75 MB"
-                                            : AppState.download-model-select == "base"   ? "~142 MB"
-                                            : AppState.download-model-select == "small"  ? "~466 MB"
-                                            : AppState.download-model-select == "medium" ? "~1.5 GB"
-                                            : "~3.1 GB";
-                                        font-size: 12px;
-                                        color: Theme.text-dim;
+                                        text: AppState.is-zh ? "🌙 深色" : "🌙 Dark";
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: (Theme.dark && !Theme.hc) ? Theme.accent : Theme.text;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
                                     }
+                                    dark-ta := TouchArea {
+                                        clicked => {
+                                            Theme.dark = true;
+                                            Theme.hc = false;
+                                        }
+                                    }
+                                    animate background { duration: 120ms; easing: ease; }
                                 }
-                                Button {
-                                    text: AppState.is-zh ? "⬇ 下載" : "⬇ Download";
-                                    enabled: !AppState.is-processing;
-                                    clicked => { AppState.download-model(AppState.download-model-select); }
+
+                                // Light
+                                light-btn := Rectangle {
+                                    width: 80px; height: 32px;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: (!Theme.dark && !Theme.hc) ? Theme.accent : Theme.border;
+                                    background: (!Theme.dark && !Theme.hc)
+                                        ? Theme.accent-dim
+                                        : (light-ta.has-hover ? Theme.border : Theme.surface);
+                                    Text {
+                                        text: AppState.is-zh ? "☀ 淺色" : "☀ Light";
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: (!Theme.dark && !Theme.hc) ? Theme.accent : Theme.text;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    light-ta := TouchArea {
+                                        clicked => {
+                                            Theme.dark = false;
+                                            Theme.hc = false;
+                                        }
+                                    }
+                                    animate background { duration: 120ms; easing: ease; }
+                                }
+
+                                // High Contrast
+                                hc-btn := Rectangle {
+                                    width: 90px; height: 32px;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: Theme.hc ? #ffd700 : Theme.border;
+                                    background: Theme.hc
+                                        ? #3d3000
+                                        : (hc-ta.has-hover ? Theme.border : Theme.surface);
+                                    Text {
+                                        text: AppState.is-zh ? "◑ 高對比" : "◑ High Contrast";
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: Theme.hc ? #ffd700 : Theme.text;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    hc-ta := TouchArea {
+                                        clicked => {
+                                            Theme.hc = !Theme.hc;
+                                            if (Theme.hc) { Theme.dark = true; }
+                                        }
+                                    }
+                                    animate background { duration: 120ms; easing: ease; }
+                                }
+
+                                Text {
+                                    text: AppState.is-zh
+                                        ? "高對比模式讓文字更清晰易讀"
+                                        : "High contrast improves text readability";
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // ── 文字轉換（OpenCC 簡繁互換）card ───────────────
+                        SectionCard {
+                            header: AppState.is-zh ? "文字轉換（OpenCC）" : "Text Conversion (OpenCC)";
+                            VerticalLayout {
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+
+                                    // 無（off）
+                                    occ-none := Rectangle {
+                                        width: 68px; height: 32px;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: AppState.opencc-mode == "" ? Theme.accent : Theme.border;
+                                        background: AppState.opencc-mode == ""
+                                            ? Theme.accent-dim
+                                            : (occ-none-ta.has-hover ? Theme.border : Theme.surface);
+                                        Text {
+                                            text: AppState.is-zh ? "✕ 無" : "✕ Off";
+                                            font-size: 13px; font-weight: 600;
+                                            color: AppState.opencc-mode == "" ? Theme.accent : Theme.text;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        occ-none-ta := TouchArea { clicked => { AppState.opencc-mode = ""; } }
+                                        animate background { duration: 120ms; easing: ease; }
+                                    }
+
+                                    // 簡→繁 s2twp
+                                    occ-s2t := Rectangle {
+                                        width: 92px; height: 32px;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: AppState.opencc-mode == "s2twp" ? Theme.accent : Theme.border;
+                                        background: AppState.opencc-mode == "s2twp"
+                                            ? Theme.accent-dim
+                                            : (occ-s2t-ta.has-hover ? Theme.border : Theme.surface);
+                                        Text {
+                                            text: "简 → 繁";
+                                            font-size: 13px; font-weight: 600;
+                                            color: AppState.opencc-mode == "s2twp" ? Theme.accent : Theme.text;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        occ-s2t-ta := TouchArea { clicked => { AppState.opencc-mode = "s2twp"; } }
+                                        animate background { duration: 120ms; easing: ease; }
+                                    }
+
+                                    // 繁→簡 t2sp
+                                    occ-t2s := Rectangle {
+                                        width: 92px; height: 32px;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: AppState.opencc-mode == "t2sp" ? Theme.accent : Theme.border;
+                                        background: AppState.opencc-mode == "t2sp"
+                                            ? Theme.accent-dim
+                                            : (occ-t2s-ta.has-hover ? Theme.border : Theme.surface);
+                                        Text {
+                                            text: "繁 → 简";
+                                            font-size: 13px; font-weight: 600;
+                                            color: AppState.opencc-mode == "t2sp" ? Theme.accent : Theme.text;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        occ-t2s-ta := TouchArea { clicked => { AppState.opencc-mode = "t2sp"; } }
+                                        animate background { duration: 120ms; easing: ease; }
+                                    }
+                                }
+                                if AppState.opencc-mode != "": Text {
+                                    text: AppState.opencc-mode == "s2twp"
+                                        ? (AppState.is-zh
+                                            ? "簡體→繁體（s2twp），辨識結束後自動套用，建議語言設為 zh / auto"
+                                            : "Simplified→Traditional (s2twp), applied after transcription. Use zh / auto.")
+                                        : (AppState.is-zh
+                                            ? "繁體→簡體（t2sp），辨識結束後自動套用，建議語言設為 zh / auto"
+                                            : "Traditional→Simplified (t2sp), applied after transcription. Use zh / auto.");
+                                    font-size: 12px;
+                                    color: Theme.text-dim;
+                                    wrap: word-wrap;
                                 }
                             }
                         }

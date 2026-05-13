@@ -20,10 +20,33 @@ pub struct AppConfig {
     pub gain_enabled: bool,
     #[serde(default = "default_gain_level")]
     pub gain_level: f32,
+    #[serde(default)]
+    pub opencc_mode: String,  // "" | "s2twp" (簡→繁) | "t2sp" (繁→簡)
+    #[serde(default = "default_true")]
+    pub languagetool_enabled: bool,
+    // ── Whisper engine params ────────────────────────────────────────────────
+    #[serde(default)]
+    pub temperature: f32,           // 0.0 = most deterministic
+    #[serde(default = "default_beam_size")]
+    pub beam_size: i32,             // ≥2 → BeamSearch; 1 → Greedy
+    #[serde(default = "default_best_of")]
+    pub best_of: i32,               // samples for greedy fallback
+    #[serde(default)]
+    pub no_context: bool,           // ignore previous segment context
+    #[serde(default)]
+    pub single_segment: bool,       // force single output segment
+    #[serde(default)]
+    pub word_timestamps: bool,      // token-level timestamps
+    #[serde(default)]
+    pub initial_prompt: String,     // domain hint for first segment
+    #[serde(default)]
+    pub max_len: i32,               // max tokens per segment; 0 = unlimited
 }
 
 fn default_true() -> bool { true }
 fn default_gain_level() -> f32 { 2.0 }
+fn default_beam_size() -> i32 { 5 }
+fn default_best_of() -> i32 { 5 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SendMode {
@@ -36,7 +59,7 @@ pub enum SendMode {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            model_path: String::from("models/ggml-tiny.bin"),
+            model_path: String::from("models/ggml-medium.bin"),
             language: String::from("auto"),
             send_mode: SendMode::Clipboard,
             http_url: String::new(),
@@ -48,6 +71,16 @@ impl Default for AppConfig {
             correction_enabled: true,
             gain_enabled: false,
             gain_level: 2.0,
+            opencc_mode: String::new(),
+            languagetool_enabled: true,
+            temperature: 0.0,
+            beam_size: 5,
+            best_of: 5,
+            no_context: false,
+            single_segment: false,
+            word_timestamps: false,
+            initial_prompt: String::new(),
+            max_len: 0,
         }
     }
 }

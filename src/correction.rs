@@ -33,8 +33,9 @@ impl CorrectionResult {
 }
 
 /// Entry point — runs all three engines in sequence.
+/// `lt_enabled` controls whether LanguageTool is called (requires network).
 /// Individual engine failures are logged to stderr and skipped gracefully.
-pub fn correct_text(text: &str, language: &str) -> CorrectionResult {
+pub fn correct_text(text: &str, language: &str, lt_enabled: bool) -> CorrectionResult {
     let is_english = matches!(language, "en" | "auto" | "");
     let mut current = text.to_string();
 
@@ -55,10 +56,14 @@ pub fn correct_text(text: &str, language: &str) -> CorrectionResult {
         0
     };
 
-    // 3. LanguageTool — multilingual grammar + spelling over HTTP
-    let lt_fixes = match run_languagetool(&current, language) {
-        Ok((fixed, n)) => { current = fixed; n }
-        Err(e) => { eprintln!("[LanguageTool] {e}"); 0 }
+    // 3. LanguageTool — multilingual grammar + spelling over HTTP (optional)
+    let lt_fixes = if lt_enabled {
+        match run_languagetool(&current, language) {
+            Ok((fixed, n)) => { current = fixed; n }
+            Err(e) => { eprintln!("[LanguageTool] {e}"); 0 }
+        }
+    } else {
+        0
     };
 
     CorrectionResult { text: current, spell_fixes, grammar_hints, lt_fixes }

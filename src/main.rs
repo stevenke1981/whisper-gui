@@ -5,6 +5,7 @@ mod config;
 mod audio;
 mod correction;
 mod hotkeys;
+mod opencc;
 mod send;
 mod whisper;
 
@@ -83,10 +84,23 @@ fn sync_config_to_ui(ui: &AppWindow, config: &config::AppConfig) {
     settings.hotkey_ptt_enabled = config.hotkey_ptt_enabled;
     settings.correction_enabled = config.correction_enabled;
     settings.gain_enabled = config.gain_enabled;
-    settings.gain_level = config.gain_level;
+    settings.languagetool_enabled = config.languagetool_enabled;
     state.set_settings(settings);
+    state.set_gain_level(config.gain_level);
+    state.set_opencc_mode(config.opencc_mode.clone().into());
+    // Refresh dict / model existence badges on startup
+    state.set_dict_en_exists(whisper::dict_exists("en_frequency.txt", "dicts"));
     state.set_current_model(extract_model_name(&config.model_path).into());
     state.set_current_language(config.language.clone().into());
+    // Whisper engine params
+    state.set_whisper_temperature(config.temperature);
+    state.set_whisper_beam_size(config.beam_size as f32);
+    state.set_whisper_best_of(config.best_of as f32);
+    state.set_whisper_no_context(config.no_context);
+    state.set_whisper_single_segment(config.single_segment);
+    state.set_whisper_word_timestamps(config.word_timestamps);
+    state.set_whisper_initial_prompt(config.initial_prompt.clone().into());
+    state.set_whisper_max_len(config.max_len as f32);
 }
 
 fn extract_model_name(path: &str) -> &str {

@@ -28,6 +28,7 @@ enigo = "0.2"
 languagetool-rust = { version = "3", default-features = false, features = ["native-tls"] }
 harper-core = { version = "2", default-features = false }
 symspell = "0.5"
+ferrous-opencc = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winuser"] }

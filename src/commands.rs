@@ -177,9 +177,23 @@ pub fn setup_commands(
             let output_dir = config.borrow().output_dir.clone();
             let hwnd = *target_hwnd.lock().unwrap();
             let correction_enabled = config.borrow().correction_enabled;
-            let gain_enabled = config.borrow().gain_enabled;
-            let gain_level = config.borrow().gain_level;
+            let lt_enabled = state.get_settings().languagetool_enabled;
+            let gain_enabled = state.get_settings().gain_enabled;
+            let gain_level = state.get_gain_level();
+            let opencc_mode = state.get_opencc_mode().to_string();
             let is_zh = state.get_is_zh();
+            let t_params = whisper::TranscribeParams {
+                language: language.clone(),
+                n_threads: None,
+                temperature: state.get_whisper_temperature(),
+                beam_size: state.get_whisper_beam_size().round() as i32,
+                best_of: state.get_whisper_best_of().round() as i32,
+                no_context: state.get_whisper_no_context(),
+                single_segment: state.get_whisper_single_segment(),
+                word_timestamps: state.get_whisper_word_timestamps(),
+                initial_prompt: state.get_whisper_initial_prompt().to_string(),
+                max_len: state.get_whisper_max_len().round() as i32,
+            };
             let ui_weak2 = ui_weak.clone();
             let engine2 = engine.clone();
 
@@ -189,6 +203,12 @@ pub fn setup_commands(
             } else {
                 audio_data
             };
+
+            // Save WAV to output directory (non-blocking, best-effort)
+            match crate::audio::save_wav(&audio_data, &output_dir) {
+                Ok(wav_path) => log_append(&state, &format!("音訊已儲存：{}", wav_path)),
+                Err(e) => log_append(&state, &format!("音訊儲存失敗：{}", e)),
+            }
 
             std::thread::spawn(move || {
                 let t_total = std::time::Instant::now();
@@ -213,7 +233,7 @@ pub fn setup_commands(
                 }
 
                 let t_infer = std::time::Instant::now();
-                let result = guard.transcribe_pcm(&audio_data, &language, None);
+                let result = guard.transcribe_pcm(&audio_data, &t_params);
                 let infer_ms = t_infer.elapsed().as_millis();
                 let total_ms = t_total.elapsed().as_millis();
                 drop(guard);
@@ -221,11 +241,19 @@ pub fn setup_commands(
                 // Auto-correct in background thread (before UI update) if enabled
                 let (result, correction_log) = match result {
                     Ok((text, elapsed)) if correction_enabled => {
-                        let cr = crate::correction::correct_text(&text, &language);
+                        let cr = crate::correction::correct_text(&text, &language, lt_enabled);
                         let log = cr.log_line(is_zh);
                         (Ok((cr.text, elapsed)), Some(log))
                     }
                     other => (other, None),
+                };
+
+                // OpenCC conversion (s2twp / t2sp)
+                let result = match result {
+                    Ok((text, elapsed)) if !opencc_mode.is_empty() => {
+                        Ok((crate::opencc::apply_mode(&text, &opencc_mode), elapsed))
+                    }
+                    other => other,
                 };
 
                 let _ = slint::invoke_from_event_loop(move || {
@@ -367,12 +395,22 @@ pub fn setup_commands(
             let model_name_str = model_name.to_string();
             let ui_weak2 = ui_weak.clone();
 
+            // Skip if model file already exists
+            if whisper::model_exists(&model_name_str, "models") {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.global::<crate::AppState>().set_status(SharedString::from(format!(
+                        "✓ {} 模型已存在，直接載入", model_name_str
+                    )));
+                    ui.global::<crate::AppState>().invoke_load_model();
+                }
+                return;
+            }
+
             if let Some(ui) = ui_weak.upgrade() {
                 let state = ui.global::<crate::AppState>();
                 state.set_is_processing(true);
                 state.set_status(SharedString::from(format!(
-                    "⬇ Downloading {} model...",
-                    model_name_str
+                    "⬇ 下載 {} 模型中（請稍候）…", model_name_str
                 )));
             }
 
@@ -383,8 +421,7 @@ pub fn setup_commands(
                             if let Some(ui) = ui_weak2.upgrade() {
                                 let state = ui.global::<crate::AppState>();
                                 state.set_status(SharedString::from(format!(
-                                    "Downloaded: {}",
-                                    path
+                                    "✓ 下載完成：{}", path
                                 )));
                                 state.set_is_processing(false);
                                 ui.global::<crate::AppState>().invoke_load_model();
@@ -397,14 +434,72 @@ pub fn setup_commands(
                             if let Some(ui) = ui_weak2.upgrade() {
                                 let state = ui.global::<crate::AppState>();
                                 state.set_status(SharedString::from(format!(
-                                    "Download failed: {}",
-                                    msg
+                                    "下載失敗: {}", msg
                                 )));
                                 state.set_is_processing(false);
                             }
                         });
                     }
                 }
+            });
+        }
+    });
+
+    ui.global::<crate::AppState>().on_check_model_exists({
+        let ui_weak = ui_weak.clone();
+        move |model_name: SharedString| {
+            let exists = whisper::model_exists(&model_name.to_string(), "models");
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<crate::AppState>().set_download_model_exists(exists);
+            }
+        }
+    });
+
+    ui.global::<crate::AppState>().on_check_dict_exists({
+        let ui_weak = ui_weak.clone();
+        move || {
+            let exists = whisper::dict_exists("en_frequency.txt", "dicts");
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<crate::AppState>().set_dict_en_exists(exists);
+            }
+        }
+    });
+
+    ui.global::<crate::AppState>().on_download_dict({
+        let ui_weak = ui_weak.clone();
+        move |dict_id: SharedString| {
+            let id = dict_id.to_string();
+            let ui_weak2 = ui_weak.clone();
+
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<crate::AppState>();
+                state.set_dict_en_downloading(true);
+                state.set_status(SharedString::from(format!(
+                    "⬇ 下載 {} 字典檔中，請稍候…", id
+                )));
+            }
+
+            std::thread::spawn(move || {
+                let result = whisper::download_dict(&id, "dicts");
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak2.upgrade() {
+                        let state = ui.global::<crate::AppState>();
+                        state.set_dict_en_downloading(false);
+                        match result {
+                            Ok(path) => {
+                                state.set_dict_en_exists(true);
+                                state.set_status(SharedString::from(format!(
+                                    "✓ 字典檔下載完成：{}", path
+                                )));
+                            }
+                            Err(e) => {
+                                state.set_status(SharedString::from(format!(
+                                    "字典下載失敗：{}", e
+                                )));
+                            }
+                        }
+                    }
+                });
             });
         }
     });
@@ -427,8 +522,19 @@ pub fn setup_commands(
                 cfg.hotkey_toggle_enabled = settings.hotkey_toggle_enabled;
                 cfg.hotkey_ptt_enabled = settings.hotkey_ptt_enabled;
                 cfg.correction_enabled = settings.correction_enabled;
+                cfg.languagetool_enabled = settings.languagetool_enabled;
                 cfg.gain_enabled = settings.gain_enabled;
-                cfg.gain_level = settings.gain_level;
+                cfg.gain_level = ui.global::<crate::AppState>().get_gain_level();
+                cfg.opencc_mode = ui.global::<crate::AppState>().get_opencc_mode().to_string();
+                let s = ui.global::<crate::AppState>();
+                cfg.temperature = s.get_whisper_temperature();
+                cfg.beam_size = s.get_whisper_beam_size().round() as i32;
+                cfg.best_of = s.get_whisper_best_of().round() as i32;
+                cfg.no_context = s.get_whisper_no_context();
+                cfg.single_segment = s.get_whisper_single_segment();
+                cfg.word_timestamps = s.get_whisper_word_timestamps();
+                cfg.initial_prompt = s.get_whisper_initial_prompt().to_string();
+                cfg.max_len = s.get_whisper_max_len().round() as i32;
                 if let Err(e) = cfg.save() {
                     eprintln!("Failed to save config: {}", e);
                 }
@@ -456,8 +562,9 @@ pub fn setup_commands(
 
             let ui_weak2 = ui_weak.clone();
 
+            let lt_enabled_corr = state.get_settings().languagetool_enabled;
             std::thread::spawn(move || {
-                let result = crate::correction::correct_text(&text, &language);
+                let result = crate::correction::correct_text(&text, &language, lt_enabled_corr);
                 let corrected = result.text.clone();
                 let summary = result.log_line(is_zh);
 
@@ -493,9 +600,19 @@ pub fn setup_commands(
                     settings.hotkey_toggle_enabled = cfg.hotkey_toggle_enabled;
                     settings.hotkey_ptt_enabled = cfg.hotkey_ptt_enabled;
                     settings.correction_enabled = cfg.correction_enabled;
+                    settings.languagetool_enabled = cfg.languagetool_enabled;
                     settings.gain_enabled = cfg.gain_enabled;
-                    settings.gain_level = cfg.gain_level;
                     state.set_settings(settings);
+                    state.set_gain_level(cfg.gain_level);
+                    state.set_opencc_mode(cfg.opencc_mode.clone().into());
+                    state.set_whisper_temperature(cfg.temperature);
+                    state.set_whisper_beam_size(cfg.beam_size as f32);
+                    state.set_whisper_best_of(cfg.best_of as f32);
+                    state.set_whisper_no_context(cfg.no_context);
+                    state.set_whisper_single_segment(cfg.single_segment);
+                    state.set_whisper_word_timestamps(cfg.word_timestamps);
+                    state.set_whisper_initial_prompt(cfg.initial_prompt.clone().into());
+                    state.set_whisper_max_len(cfg.max_len as f32);
                 }
                 *config.borrow_mut() = cfg;
             }
